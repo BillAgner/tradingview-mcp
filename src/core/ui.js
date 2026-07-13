@@ -1,7 +1,14 @@
 /**
  * Core UI automation logic.
  */
-import { evaluate, evaluateAsync, getClient } from '../connection.js';
+import { evaluate, evaluateAsync, getClient, DIALOG_DETECT_JS } from '../connection.js';
+
+// Button labels that close a dialog WITHOUT taking its "confirm" action, in
+// priority order. Used by dismissDialog()'s default 'safe' mode so an agent
+// never has to guess which of a dialog's buttons is destructive.
+const SAFE_DISMISS_LABELS = [
+  'cancel', 'close', 'no', 'no thanks', 'not now', 'later', 'skip', 'dismiss',
+];
 
 export async function click({ by, value }) {
   const escaped = JSON.stringify(value);
@@ -101,6 +108,70 @@ export async function fullscreen() {
   return { success: true, action: 'fullscreen_toggled' };
 }
 
+/**
+ * Close a blocking modal dialog (see DIALOG_DETECT_JS) — TradingView's native
+ * "Save layout before switching?", unsaved-script warnings, etc. By default
+ * picks the least-destructive button available (Cancel/Close/Skip/...); pass
+ * `prefer` to target a specific button (e.g. "Don't save") when the caller
+ * actually wants the non-default action.
+ */
+export async function dismissDialog({ prefer } = {}) {
+  const detected = await evaluate(DIALOG_DETECT_JS);
+  if (!detected?.present) {
+    return { success: true, dismissed: false, note: 'No blocking dialog found.' };
+  }
+
+  const buttons = detected.buttons || [];
+  let target = null;
+
+  if (prefer) {
+    target = buttons.find((b) => b.toLowerCase() === prefer.toLowerCase())
+      || buttons.find((b) => b.toLowerCase().includes(prefer.toLowerCase()));
+    if (!target) throw new Error(`Dialog has no button matching "${prefer}". Available: ${buttons.join(', ') || '(none found)'}`);
+  } else {
+    for (const label of SAFE_DISMISS_LABELS) {
+      target = buttons.find((b) => b.toLowerCase() === label);
+      if (target) break;
+    }
+    // Informational dialog with a single acknowledgement button (e.g. "OK",
+    // "Got it") — there is no safer option, so that IS the safe action.
+    if (!target && buttons.length === 1) target = buttons[0];
+  }
+
+  if (!target) {
+    return {
+      success: false,
+      dismissed: false,
+      dialog: detected,
+      error: `No safe dismiss button identified among: ${buttons.join(', ') || '(none found)'}. Pass 'prefer' to pick one explicitly.`,
+    };
+  }
+
+  const clicked = await evaluate(`
+    (function() {
+      var target = ${JSON.stringify(target)};
+      var btns = document.querySelectorAll('button');
+      for (var i = 0; i < btns.length; i++) {
+        if (btns[i].textContent.trim() === target && btns[i].offsetParent !== null) {
+          btns[i].click();
+          return true;
+        }
+      }
+      return false;
+    })()
+  `);
+  if (!clicked) throw new Error(`Found button "${target}" during detection but could not click it — dialog state may have changed.`);
+
+  await new Promise((r) => setTimeout(r, 300));
+  const stillThere = await evaluate(DIALOG_DETECT_JS);
+  return {
+    success: true,
+    dismissed: !stillThere?.present,
+    button_clicked: target,
+    dialog_was: { title: detected.title, message: detected.message, buttons },
+  };
+}
+
 export async function layoutList() {
   const layouts = await evaluateAsync(`
     new Promise(function(resolve) {
@@ -123,18 +194,24 @@ export async function layoutSwitch({ name }) {
     new Promise(function(resolve) {
       try {
         var target = ${escaped};
-        if (/^\\d+$/.test(target)) { window.TradingViewApi.loadChartFromServer(target); resolve({success: true, method: 'loadChartFromServer', id: target, source: 'internal_api'}); return; }
         window.TradingViewApi.getSavedCharts(function(charts) {
           if (!charts || !Array.isArray(charts)) { resolve({success: false, error: 'getSavedCharts returned no data', source: 'internal_api'}); return; }
           var match = null;
-          for (var i = 0; i < charts.length; i++) { var cname = charts[i].name || charts[i].title || ''; if (cname === target || cname.toLowerCase() === target.toLowerCase()) { match = charts[i]; break; } }
+          if (/^\\d+$/.test(target)) { for (var k = 0; k < charts.length; k++) { if (String(charts[k].id) === target) { match = charts[k]; break; } } }
+          if (!match) { for (var i = 0; i < charts.length; i++) { var cname = charts[i].name || charts[i].title || ''; if (cname === target || cname.toLowerCase() === target.toLowerCase()) { match = charts[i]; break; } } }
           if (!match) { for (var j = 0; j < charts.length; j++) { var cn = (charts[j].name || charts[j].title || '').toLowerCase(); if (cn.indexOf(target.toLowerCase()) !== -1) { match = charts[j]; break; } } }
           if (!match) { resolve({success: false, error: 'Layout "' + target + '" not found.', source: 'internal_api'}); return; }
-          var chartId = match.id || match.chartId;
-          window.TradingViewApi.loadChartFromServer(chartId);
-          resolve({success: true, method: 'loadChartFromServer', id: chartId, name: match.name || match.title, source: 'internal_api'});
+          // loadChartFromServer needs the FULL saved-chart object (it reads match.url to build
+          // the "/chart/<url>/" request); passing a bare id/string leaves that undefined and the
+          // internal fetch 404s on "/chart/undefined/json/" — silently, since the call was never awaited.
+          window.TradingViewApi.loadChartFromServer(match)
+            .then(function() { resolve({success: true, method: 'loadChartFromServer', id: match.id, name: match.name || match.title, source: 'internal_api'}); })
+            .catch(function(e) {
+              var msg = (e && e.message) || (e && typeof e.status === 'number' ? ('HTTP ' + e.status + ' ' + (e.url || '')) : String(e));
+              resolve({success: false, error: 'loadChartFromServer failed: ' + msg, source: 'internal_api'});
+            });
         });
-        setTimeout(function() { resolve({success: false, error: 'getSavedCharts timed out', source: 'internal_api'}); }, 5000);
+        setTimeout(function() { resolve({success: false, error: 'getSavedCharts timed out', source: 'internal_api'}); }, 8000);
       } catch(e) { resolve({success: false, error: e.message, source: 'internal_api'}); }
     })
   `);

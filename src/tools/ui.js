@@ -24,6 +24,13 @@ export function registerUiTools(server) {
     catch (err) { return jsonResult({ success: false, error: err.message }, true); }
   });
 
+  server.tool('ui_dismiss_dialog', 'Close a blocking modal dialog (e.g. "Save layout before switching?", unsaved-script warnings). tv_health_check and tv_ui_state report blocking_dialog when one is up. Defaults to the least-destructive button (Cancel/Close/Skip/...); pass prefer to target a specific button by name instead.', {
+    prefer: z.string().optional().describe('Exact or partial button text to click instead of the safe default (e.g. "Don\'t save")'),
+  }, async ({ prefer }) => {
+    try { return jsonResult(await core.dismissDialog({ prefer })); }
+    catch (err) { return jsonResult({ success: false, error: err.message }, true); }
+  });
+
   server.tool('layout_list', 'List saved chart layouts', {}, async () => {
     try { return jsonResult(await core.layoutList()); }
     catch (err) { return jsonResult({ success: false, error: err.message }, true); }

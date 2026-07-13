@@ -18,9 +18,11 @@ function scriptsDir() {
 
 /**
  * Resolve the Python interpreter (Hermes venv).
+ * Note: C:/Data/Hermes 0.17.0/.venv also exists but lacks numpy/yfinance —
+ * `venv` (no dot) is the one with the packages options_screen.py needs.
  */
 function pythonExe() {
-  return 'C:/Data/Hermes/hermes-agent/venv/Scripts/python.exe';
+  return 'C:/Data/Hermes 0.17.0/venv/Scripts/python.exe';
 }
 
 /**

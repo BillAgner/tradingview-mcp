@@ -29,6 +29,85 @@ const KNOWN_PATHS = {
 export { KNOWN_PATHS };
 
 /**
+ * JS expression (evaluated in-page) that detects a blocking modal dialog —
+ * TradingView's "Save layout before switching?", unsaved-script warnings,
+ * login prompts, etc. These are native browser-UI confirmations meant for a
+ * human to click through; a CDP-driven agent has no way to notice one is up
+ * except that whatever it just tried to do silently didn't happen (see the
+ * layoutSwitch bug this was built to prevent a repeat of). Exposed via
+ * health.healthCheck()/health.uiState() so agents see it on their very next
+ * status check, and dismissible via ui.dismissDialog().
+ *
+ * Heuristic, not exact: matches visible [role="dialog"] first (the strongest
+ * signal), falling back to [class*="dialog"|"modal"|"popup"] elements that
+ * are reasonably dialog-sized and contain at least one <button> — this
+ * excludes small hover tooltips (no buttons) and normal dropdown menus
+ * (usually <div>/<li> items, not <button>, and no role="dialog").
+ */
+export const DIALOG_DETECT_JS = `
+  (function() {
+    function describe(el) {
+      var buttons = [];
+      var btns = el.querySelectorAll('button');
+      for (var b = 0; b < btns.length; b++) {
+        var t = btns[b].textContent.trim();
+        if (t && btns[b].offsetParent !== null) buttons.push(t);
+      }
+      var heading = el.querySelector('h1, h2, h3, [class*="title"]');
+      var title = heading ? heading.textContent.trim() : '';
+      var fullText = (el.textContent || '').trim().replace(/\\s+/g, ' ').substring(0, 300);
+      return { present: true, title: title, message: fullText, buttons: buttons };
+    }
+
+    // Persistent docked panels (Pine editor, watchlist, strategy tester, widget
+    // bar) legitimately match "dialog|modal|popup"-ish class substrings in
+    // TradingView's minified CSS but are not blocking overlays — exclude
+    // anything living inside one of them.
+    var EXCLUDE_CONTAINERS = '[class*="layout__area"], [class*="pine-editor"], .monaco-editor,' +
+      ' [data-name="widgetbar-wrap"], [data-name="backtesting"]';
+
+    function isRealOverlay(el) {
+      if (el.closest(EXCLUDE_CONTAINERS)) return false;
+      var rect = el.getBoundingClientRect();
+      // True modals are centered overlays, not edge-docked panels — a panel
+      // docked to the right/bottom has a center far from the viewport's.
+      var elCenterX = rect.left + rect.width / 2;
+      var elCenterY = rect.top + rect.height / 2;
+      var viewCenterX = window.innerWidth / 2;
+      var viewCenterY = window.innerHeight / 2;
+      if (Math.abs(elCenterX - viewCenterX) > window.innerWidth * 0.2) return false;
+      if (Math.abs(elCenterY - viewCenterY) > window.innerHeight * 0.3) return false;
+      return true;
+    }
+
+    var viaRole = document.querySelector('[role="dialog"]');
+    if (viaRole && viaRole.offsetParent !== null && isRealOverlay(viaRole)) return describe(viaRole);
+
+    var selectors = ['[class*="dialog"]', '[class*="modal"]', '[class*="popup"]'];
+    var best = null, bestArea = 0;
+    var seen = [];
+    for (var s = 0; s < selectors.length; s++) {
+      var els = document.querySelectorAll(selectors[s]);
+      for (var i = 0; i < els.length; i++) {
+        var el = els[i];
+        if (seen.indexOf(el) !== -1) continue;
+        seen.push(el);
+        if (el.offsetParent === null) continue;
+        var rect = el.getBoundingClientRect();
+        if (rect.width < 200 || rect.height < 100) continue;
+        if (rect.width > window.innerWidth * 0.95 && rect.height > window.innerHeight * 0.95) continue;
+        if (el.querySelectorAll('button').length === 0) continue;
+        if (!isRealOverlay(el)) continue;
+        var area = rect.width * rect.height;
+        if (area > bestArea) { bestArea = area; best = el; }
+      }
+    }
+    if (!best) return { present: false };
+    return describe(best);
+  })()
+`;
+
+/**
  * Sanitize a string for safe interpolation into JavaScript code evaluated via CDP.
  * Uses JSON.stringify to produce a properly escaped JS string literal (with quotes).
  * Prevents injection via quotes, backticks, template literals, or control chars.

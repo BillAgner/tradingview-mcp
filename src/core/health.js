@@ -1,7 +1,7 @@
 /**
  * Core health/discovery/launch logic.
  */
-import { getClient, getTargetInfo, evaluate } from '../connection.js';
+import { getClient, getTargetInfo, evaluate, DIALOG_DETECT_JS } from '../connection.js';
 import { existsSync } from 'fs';
 import { execSync, spawn } from 'child_process';
 
@@ -29,6 +29,11 @@ export async function healthCheck() {
     })()
   `);
 
+  const dialog = await evaluate(DIALOG_DETECT_JS).catch(() => ({ present: false }));
+  const blocking_dialog = dialog?.present
+    ? { ...dialog, hint: 'A modal is blocking chart interaction. Use ui_dismiss_dialog to close it before retrying.' }
+    : { present: false };
+
   return {
     success: true,
     cdp_connected: true,
@@ -39,6 +44,7 @@ export async function healthCheck() {
     chart_resolution: state?.resolution || 'unknown',
     chart_type: state?.chartType ?? null,
     api_available: state?.apiAvailable ?? false,
+    blocking_dialog,
   };
 }
 
@@ -156,7 +162,12 @@ export async function uiState() {
     })()
   `);
 
-  return { success: true, ...state };
+  const dialog = await evaluate(DIALOG_DETECT_JS).catch(() => ({ present: false }));
+  const blocking_dialog = dialog?.present
+    ? { ...dialog, hint: 'A modal is blocking chart interaction. Use ui_dismiss_dialog to close it before retrying.' }
+    : { present: false };
+
+  return { success: true, ...state, blocking_dialog };
 }
 
 export async function launch({ port, kill_existing } = {}) {
