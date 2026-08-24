@@ -192,7 +192,24 @@ async function findMoreOnOptionsCoords() {
         var el = all[i];
         if (el.children.length > 1) continue;
         var txt = (el.textContent || '').trim();
-        if (/more on options|more about options/i.test(txt)) {
+        // ANCHORED match required -- confirmed live 2026-08-24: the whole
+        // Symbol-Info panel wrapper (.widgetbar-widgetbody) has exactly one
+        // child, so it also passes the children.length<=1 filter above, and
+        // its full concatenated textContent (thousands of chars: company
+        // profile, financials, technicals, etc.) legitimately CONTAINS the
+        // substring "More on options" from the real button further down the
+        // tree. Because querySelectorAll('*') walks in document order and
+        // this wrapper precedes the real button, an unanchored substring
+        // test (the old /more on options/i.test(txt)) matched the wrapper
+        // FIRST and returned its coordinates instead of the button's --
+        // clicking the center of an unrelated huge container, landing
+        // wherever that happened to scroll to (this produced the earlier
+        // "landed on an IV term structure sub-page" false lead). The real
+        // button leaf's own trimmed textContent is exactly "More on
+        // options" (or "More about options") with nothing else, so anchor
+        // the regex to require an exact match end-to-end -- same pattern
+        // already used by isOnChainView()/clickBackToChart() in this file.
+        if (/^more on options$|^more about options$/i.test(txt)) {
           var container = el.closest('[class*="buttonContainer"]') || el.parentElement;
           container.scrollIntoView({ block: 'center' });
           var rect = container.getBoundingClientRect();
