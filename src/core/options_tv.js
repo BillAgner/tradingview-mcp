@@ -519,7 +519,11 @@ async function readFullChain() {
         for (var c = 0; c < tr.children.length; c++) {
           var cell = tr.children[c];
           var tooltipEl = cell.querySelector('[data-overflow-tooltip-text]');
-          var raw = tooltipEl ? tooltipEl.getAttribute('data-overflow-tooltip-text') : cell.textContent.trim();
+          // innerText (not textContent) so a merged-column cell's nested
+          // ".secondary-*" line (stacked greeks, e.g. delta on line one and
+          // gamma on line two -- confirmed live 2026-08-24) keeps its line
+          // break instead of collapsing into one unparseable run of digits.
+          var raw = tooltipEl ? tooltipEl.getAttribute('data-overflow-tooltip-text') : (cell.innerText || cell.textContent).trim();
           if (raw.length > 1 && raw.length % 2 === 0) {
             var half = raw.length / 2;
             if (raw.slice(0, half) === raw.slice(half)) raw = raw.slice(0, half);
@@ -684,9 +688,11 @@ async function readChainTable() {
             var cell = tr.children[c];
             // Prefer the clean tooltip-text attribute (avoids a visually-hidden
             // accessibility duplicate node inside the same cell that otherwise
-            // makes textContent read as "297.5297.5").
+            // makes textContent read as "297.5297.5"). Otherwise innerText, not
+            // textContent, so a merged-column cell's nested ".secondary-*" line
+            // (stacked greeks, e.g. delta then gamma) keeps its line break.
             var tooltipEl = cell.querySelector('[data-overflow-tooltip-text]');
-            var raw = tooltipEl ? tooltipEl.getAttribute('data-overflow-tooltip-text') : cell.textContent.trim();
+            var raw = tooltipEl ? tooltipEl.getAttribute('data-overflow-tooltip-text') : (cell.innerText || cell.textContent).trim();
             // Fallback safety net: collapse an exact self-repeated string
             // ("297.5297.5" -> "297.5") in case some column lacks the tooltip attr.
             if (raw.length > 1 && raw.length % 2 === 0) {
@@ -742,6 +748,24 @@ function parseNum(s) {
 // it once open.
 const BID_ASK_RE = /bid.*ask/i;
 
+// The Greeks columns are OFF by default in TradingView's column picker
+// (confirmed live 2026-08-24: cc_emit_filter.py's hard theta requirement
+// rejected 100% of covered-call candidates -- theta was never captured
+// because the column simply wasn't enabled, not a parsing bug). Enabled via
+// the chain table's "Customize columns" panel (header icon, top-right of
+// each side, "Shift C"); the setting is a durable TradingView Desktop
+// preference that survives closing/reopening the chain view. Once enabled,
+// TradingView renders them as TWO merged columns, each with a stacked
+// 2-line cell rather than a single value: "Delta\nGamma" (header text
+// "DeltaGamma") and "Theta • Vega\nRho" (header text "Theta • VegaRho") --
+// the first line is plain text, the second line lives in a nested
+// ".secondary-*" <div>, which is why the raw-cell extraction above now uses
+// innerText (preserves the line break) instead of textContent (which
+// concatenated both lines into one unparseable run, e.g. "0.160" for
+// delta=0.16/gamma=0).
+const DELTA_GAMMA_RE = /delta.*gamma/i;
+const THETA_VEGA_RHO_RE = /theta.*vega.*rho/i;
+
 /**
  * Turn a raw `readChainTable()` result into structured {expiration, strike,
  * call, put} rows, splitting each row at the Strike column. Column names on
@@ -758,6 +782,22 @@ function structureRows(tableResult) {
       const parts = String(rawText || '').split(/[×x]/i);
       target.bid = parseNum(parts[0]);
       target.ask = parseNum(parts[1]);
+      return;
+    }
+    if (THETA_VEGA_RHO_RE.test(rawHeader)) {
+      // Line 1: "theta • vega" (bullet-separated). Line 2 (nested div): rho.
+      const lines = String(rawText || '').split('\n');
+      const [thetaStr, vegaStr] = String(lines[0] || '').split('•');
+      target.theta = parseNum(thetaStr);
+      target.vega = parseNum(vegaStr);
+      target.rho = parseNum(lines[1]);
+      return;
+    }
+    if (DELTA_GAMMA_RE.test(rawHeader)) {
+      // Line 1: delta. Line 2 (nested div): gamma.
+      const lines = String(rawText || '').split('\n');
+      target.delta = parseNum(lines[0]);
+      target.gamma = parseNum(lines[1]);
       return;
     }
     target[name] = parseNum(rawText);
