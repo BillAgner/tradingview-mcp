@@ -62,6 +62,74 @@ export async function get() {
   };
 }
 
+export async function switchList({ name }) {
+  // First ensure watchlist panel is open
+  const panelState = await evaluate(`
+    (function() {
+      var btn = document.querySelector('[data-name="base-watchlist-widget-button"]')
+        || document.querySelector('[aria-label*="Watchlist"]');
+      if (!btn) return { error: 'Watchlist button not found' };
+      var isActive = btn.getAttribute('aria-pressed') === 'true'
+        || btn.classList.toString().indexOf('Active') !== -1
+        || btn.classList.toString().indexOf('active') !== -1;
+      if (!isActive) { btn.click(); return { opened: true }; }
+      return { opened: false };
+    })()
+  `);
+
+  if (panelState?.error) throw new Error(panelState.error);
+  if (panelState?.opened) await new Promise(r => setTimeout(r, 500));
+
+  const escaped = JSON.stringify(name);
+  const result = await evaluate(`
+    (function() {
+      var targetName = ${escaped};
+      var btn = document.querySelector('[data-name="watchlists-button"]');
+      if (!btn) return { error: 'Watchlists dropdown button not found' };
+      
+      // Open the dropdown
+      var r = btn.getBoundingClientRect();
+      var cx = r.x + r.width / 2, cy = r.y + r.height / 2;
+      ['mousedown','mouseup','click'].forEach(function(type) {
+        btn.dispatchEvent(new MouseEvent(type, {bubbles: true, cancelable: true, view: window, button: 0, clientX: cx, clientY: cy}));
+      });
+      return { success: true };
+    })()
+  `);
+  
+  if (result?.error) throw new Error(result.error);
+  await new Promise(r => setTimeout(r, 500));
+
+  const clicked = await evaluate(`
+    (function() {
+      var targetName = ${escaped};
+      var all = document.querySelectorAll('span, div');
+      for (var i = 0; i < all.length; i++) {
+        var e = all[i];
+        if ((e.innerText || '').trim().toLowerCase() === targetName.toLowerCase() && e.children.length === 0) {
+          var r = e.getBoundingClientRect();
+          if (r.y > 50 && r.width > 0 && r.height > 0) {
+            (e.closest('div[role="menuitem"]') || e.closest('div') || e).click();
+            return { success: true };
+          }
+        }
+      }
+      return { error: 'Watchlist "' + targetName + '" not found in dropdown' };
+    })()
+  `);
+  
+  if (clicked?.error) {
+    // try to close the dropdown if we failed to click
+    await evaluate(`(function(){ document.body.click(); })()`);
+    throw new Error(clicked.error);
+  }
+  
+  // Wait for the watchlist items to load
+  await new Promise(r => setTimeout(r, 1000));
+  
+  return { success: true, list: name, action: 'switched' };
+}
+
 export async function add({ symbol }) {
   // Use keyboard shortcut to open symbol search in watchlist, type symbol, press Enter
   const c = await getClient();

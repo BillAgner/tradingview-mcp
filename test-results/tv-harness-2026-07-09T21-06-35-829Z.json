@@ -1,0 +1,751 @@
+{
+  "ran_at": "2026-07-09T21:06:35.829Z",
+  "include_destructive": false,
+  "pass": 48,
+  "fail": 12,
+  "skipped": 22,
+  "results": [
+    {
+      "category": "Health & Launch",
+      "tool": "tv_health_check",
+      "tier": "safe",
+      "status": "pass",
+      "ms": 4,
+      "detail": {
+        "symbol": "NASDAQ:TSLA"
+      }
+    },
+    {
+      "category": "Health & Launch",
+      "tool": "tv_discover",
+      "tier": "safe",
+      "status": "pass",
+      "ms": 2,
+      "detail": {
+        "apis_available": 5,
+        "apis_total": 6
+      }
+    },
+    {
+      "category": "Health & Launch",
+      "tool": "tv_ui_state",
+      "tier": "safe",
+      "status": "pass",
+      "ms": 11,
+      "detail": {
+        "symbol": "NASDAQ:TSLA"
+      }
+    },
+    {
+      "category": "Health & Launch",
+      "tool": "tv_launch",
+      "tier": "destructive",
+      "status": "skip",
+      "reason": "kills and relaunches the real TradingView process — never safe to run in a harness"
+    },
+    {
+      "category": "Pine Script",
+      "tool": "pine_analyze",
+      "tier": "safe",
+      "status": "pass",
+      "ms": 1,
+      "detail": {
+        "diagnostics": 1
+      }
+    },
+    {
+      "category": "Pine Script",
+      "tool": "pine_check",
+      "tier": "safe",
+      "status": "pass",
+      "ms": 369,
+      "detail": {
+        "ok": true
+      }
+    },
+    {
+      "category": "Pine Script",
+      "tool": "pine_get_source",
+      "tier": "safe",
+      "status": "skip",
+      "reason": "could not open Pine editor"
+    },
+    {
+      "category": "Pine Script",
+      "tool": "pine_set_source",
+      "tier": "reversible",
+      "status": "skip",
+      "reason": "could not open Pine editor"
+    },
+    {
+      "category": "Pine Script",
+      "tool": "pine_compile",
+      "tier": "reversible",
+      "status": "skip",
+      "reason": "could not open Pine editor"
+    },
+    {
+      "category": "Pine Script",
+      "tool": "pine_smart_compile",
+      "tier": "reversible",
+      "status": "skip",
+      "reason": "could not open Pine editor"
+    },
+    {
+      "category": "Pine Script",
+      "tool": "pine_get_errors",
+      "tier": "safe",
+      "status": "skip",
+      "reason": "could not open Pine editor"
+    },
+    {
+      "category": "Pine Script",
+      "tool": "pine_get_console",
+      "tier": "safe",
+      "status": "skip",
+      "reason": "could not open Pine editor"
+    },
+    {
+      "category": "Pine Script",
+      "tool": "pine_new",
+      "tier": "destructive",
+      "status": "skip",
+      "reason": "could not open Pine editor"
+    },
+    {
+      "category": "Pine Script",
+      "tool": "pine_open",
+      "tier": "destructive",
+      "status": "skip",
+      "reason": "could not open Pine editor"
+    },
+    {
+      "category": "Pine Script",
+      "tool": "pine_list_scripts",
+      "tier": "safe",
+      "status": "pass",
+      "ms": 184,
+      "detail": {
+        "count": 4
+      }
+    },
+    {
+      "category": "Chart Control",
+      "tool": "chart_get_state",
+      "tier": "safe",
+      "status": "pass",
+      "ms": 2,
+      "detail": {
+        "symbol": "NASDAQ:TSLA",
+        "studies": 3
+      }
+    },
+    {
+      "category": "Chart Control",
+      "tool": "chart_set_symbol",
+      "tier": "reversible",
+      "status": "pass",
+      "ms": 24568,
+      "detail": {
+        "verified": "AAPL",
+        "restored": "NASDAQ:TSLA"
+      }
+    },
+    {
+      "category": "Chart Control",
+      "tool": "chart_set_timeframe",
+      "tier": "reversible",
+      "status": "pass",
+      "ms": 4889,
+      "detail": {
+        "verified": "D",
+        "restored": "480"
+      }
+    },
+    {
+      "category": "Chart Control",
+      "tool": "chart_set_type",
+      "tier": "reversible",
+      "status": "pass",
+      "ms": 657,
+      "detail": {
+        "verified": "Line",
+        "restored": 1
+      }
+    },
+    {
+      "category": "Chart Control",
+      "tool": "chart_manage_indicator",
+      "tier": "reversible",
+      "status": "pass",
+      "ms": 2578,
+      "detail": {
+        "added_and_removed": "GY7kYR"
+      }
+    },
+    {
+      "category": "Chart Control",
+      "tool": "chart_get_visible_range",
+      "tier": "safe",
+      "status": "fail",
+      "ms": 0,
+      "error": "evaluate is not defined"
+    },
+    {
+      "category": "Chart Control",
+      "tool": "chart_set_visible_range",
+      "tier": "reversible",
+      "status": "fail",
+      "ms": 0,
+      "error": "evaluate is not defined"
+    },
+    {
+      "category": "Chart Control",
+      "tool": "chart_scroll_to_date",
+      "tier": "reversible",
+      "status": "fail",
+      "ms": 0,
+      "error": "evaluate is not defined"
+    },
+    {
+      "category": "Chart Control",
+      "tool": "symbol_info",
+      "tier": "safe",
+      "status": "fail",
+      "ms": 0,
+      "error": "evaluate is not defined"
+    },
+    {
+      "category": "Chart Control",
+      "tool": "symbol_search",
+      "tier": "safe",
+      "status": "pass",
+      "ms": 168,
+      "detail": {
+        "count": 15
+      }
+    },
+    {
+      "category": "Data Access",
+      "tool": "data_get_ohlcv",
+      "tier": "safe",
+      "status": "pass",
+      "ms": 2,
+      "detail": {
+        "bars": 10
+      }
+    },
+    {
+      "category": "Data Access",
+      "tool": "data_get_ohlcv (summary)",
+      "tier": "safe",
+      "status": "pass",
+      "ms": 2,
+      "detail": {
+        "ok": true
+      }
+    },
+    {
+      "category": "Data Access",
+      "tool": "data_get_indicator",
+      "tier": "safe",
+      "status": "pass",
+      "ms": 6,
+      "detail": {
+        "entity_id": "gzHULJ"
+      }
+    },
+    {
+      "category": "Data Access",
+      "tool": "data_get_strategy_results",
+      "tier": "safe",
+      "status": "pass",
+      "ms": 2,
+      "detail": {
+        "has_data": true
+      }
+    },
+    {
+      "category": "Data Access",
+      "tool": "data_get_trades",
+      "tier": "safe",
+      "status": "pass",
+      "ms": 2,
+      "detail": {
+        "ok": true
+      }
+    },
+    {
+      "category": "Data Access",
+      "tool": "data_get_equity",
+      "tier": "safe",
+      "status": "pass",
+      "ms": 1,
+      "detail": {
+        "ok": true
+      }
+    },
+    {
+      "category": "Data Access",
+      "tool": "quote_get",
+      "tier": "safe",
+      "status": "pass",
+      "ms": 5,
+      "detail": {
+        "symbol": "NASDAQ:TSLA",
+        "last": 406.56
+      }
+    },
+    {
+      "category": "Data Access",
+      "tool": "depth_get",
+      "tier": "safe",
+      "status": "skip",
+      "reason": "DOM/Depth-of-Market panel not open (expected unless a user has it open): DOM / Depth of Market panel not found."
+    },
+    {
+      "category": "Data Access",
+      "tool": "data_get_study_values",
+      "tier": "safe",
+      "status": "pass",
+      "ms": 3,
+      "detail": {
+        "ok": true
+      }
+    },
+    {
+      "category": "Data Access",
+      "tool": "data_get_pine_lines",
+      "tier": "safe",
+      "status": "pass",
+      "ms": 3,
+      "detail": {
+        "ok": true
+      }
+    },
+    {
+      "category": "Data Access",
+      "tool": "data_get_pine_labels",
+      "tier": "safe",
+      "status": "pass",
+      "ms": 3,
+      "detail": {
+        "ok": true
+      }
+    },
+    {
+      "category": "Data Access",
+      "tool": "data_get_pine_tables",
+      "tier": "safe",
+      "status": "pass",
+      "ms": 2,
+      "detail": {
+        "ok": true
+      }
+    },
+    {
+      "category": "Data Access",
+      "tool": "data_get_pine_boxes",
+      "tier": "safe",
+      "status": "pass",
+      "ms": 2,
+      "detail": {
+        "ok": true
+      }
+    },
+    {
+      "category": "Replay Mode",
+      "tool": "replay_start",
+      "tier": "reversible",
+      "status": "pass",
+      "ms": 664,
+      "detail": {
+        "current_date": 1277825100
+      }
+    },
+    {
+      "category": "Replay Mode",
+      "tool": "replay_step",
+      "tier": "reversible",
+      "status": "fail",
+      "ms": 3151,
+      "error": "ground truth: current_date did not advance"
+    },
+    {
+      "category": "Replay Mode",
+      "tool": "replay_autoplay",
+      "tier": "reversible",
+      "status": "pass",
+      "ms": 375,
+      "detail": {
+        "toggled": true
+      }
+    },
+    {
+      "category": "Replay Mode",
+      "tool": "replay_trade",
+      "tier": "reversible",
+      "status": "pass",
+      "ms": 13,
+      "detail": {
+        "paper_trade": "buy_then_close"
+      }
+    },
+    {
+      "category": "Replay Mode",
+      "tool": "replay_status",
+      "tier": "safe",
+      "status": "pass",
+      "ms": 5,
+      "detail": {
+        "is_replay_started": true
+      }
+    },
+    {
+      "category": "Replay Mode",
+      "tool": "replay_stop",
+      "tier": "reversible",
+      "status": "pass",
+      "ms": 61,
+      "detail": {
+        "stopped": true
+      }
+    },
+    {
+      "category": "Screenshots",
+      "tool": "capture_screenshot",
+      "tier": "safe",
+      "status": "pass",
+      "ms": 303,
+      "detail": {
+        "file_path": "C:\\Data\\Hermes\\~\\tradingview-mcp\\screenshots\\tv_chart_2026-07-09T21-05-41-879Z.png"
+      }
+    },
+    {
+      "category": "Drawings",
+      "tool": "draw_list",
+      "tier": "safe",
+      "status": "fail",
+      "ms": 0,
+      "error": "getChartApi is not defined"
+    },
+    {
+      "category": "Drawings",
+      "tool": "draw_shape",
+      "tier": "reversible",
+      "status": "fail",
+      "ms": 0,
+      "error": "getChartApi is not defined"
+    },
+    {
+      "category": "Drawings",
+      "tool": "draw_get_properties",
+      "tier": "safe",
+      "status": "skip",
+      "reason": "draw_shape did not produce a shape to inspect"
+    },
+    {
+      "category": "Drawings",
+      "tool": "draw_remove_one",
+      "tier": "reversible",
+      "status": "skip",
+      "reason": "draw_shape did not produce a shape to remove"
+    },
+    {
+      "category": "Drawings",
+      "tool": "draw_clear",
+      "tier": "destructive",
+      "status": "skip",
+      "reason": "wipes ALL drawings on the chart, including the user's real ones — rerun with --include-destructive"
+    },
+    {
+      "category": "Alerts",
+      "tool": "alert_list",
+      "tier": "safe",
+      "status": "pass",
+      "ms": 119,
+      "detail": {
+        "count": 0
+      }
+    },
+    {
+      "category": "Alerts",
+      "tool": "alert_create",
+      "tier": "destructive",
+      "status": "skip",
+      "reason": "creates a real, hard-to-clean-up alert — rerun with --include-destructive (still not run — see note in source)"
+    },
+    {
+      "category": "Alerts",
+      "tool": "alert_delete",
+      "tier": "destructive",
+      "status": "skip",
+      "reason": "delete_all wipes every real alert — rerun with --include-destructive (still not run — see note in source)"
+    },
+    {
+      "category": "Batch",
+      "tool": "batch_run",
+      "tier": "reversible",
+      "status": "pass",
+      "ms": 24133,
+      "detail": {
+        "batch_size": 1
+      }
+    },
+    {
+      "category": "Indicators",
+      "tool": "indicator_toggle_visibility",
+      "tier": "reversible",
+      "status": "pass",
+      "ms": 31,
+      "detail": {
+        "toggled_and_restored": "gzHULJ"
+      }
+    },
+    {
+      "category": "Indicators",
+      "tool": "indicator_set_inputs",
+      "tier": "reversible",
+      "status": "pass",
+      "ms": 115,
+      "detail": {
+        "no_op_write": "pineId"
+      }
+    },
+    {
+      "category": "Watchlist",
+      "tool": "watchlist_get",
+      "tier": "safe",
+      "status": "pass",
+      "ms": 26,
+      "detail": {
+        "count": 3,
+        "source": "data_attributes"
+      }
+    },
+    {
+      "category": "Watchlist",
+      "tool": "watchlist_add",
+      "tier": "destructive",
+      "status": "skip",
+      "reason": "permanently adds a symbol with no watchlist_remove tool to undo it — never run automatically"
+    },
+    {
+      "category": "UI Automation",
+      "tool": "ui_evaluate",
+      "tier": "safe",
+      "status": "pass",
+      "ms": 1,
+      "detail": {
+        "ok": true
+      }
+    },
+    {
+      "category": "UI Automation",
+      "tool": "ui_find_element",
+      "tier": "safe",
+      "status": "pass",
+      "ms": 3,
+      "detail": {
+        "ok": true
+      }
+    },
+    {
+      "category": "UI Automation",
+      "tool": "ui_click",
+      "tier": "reversible",
+      "status": "pass",
+      "ms": 2,
+      "detail": {
+        "attempted": true,
+        "outcome": "No matching element found for aria-label=\"Undo\""
+      }
+    },
+    {
+      "category": "UI Automation",
+      "tool": "ui_hover",
+      "tier": "safe",
+      "status": "pass",
+      "ms": 24,
+      "detail": {
+        "attempted": true,
+        "outcome": "hovered or not found, both acceptable"
+      }
+    },
+    {
+      "category": "UI Automation",
+      "tool": "ui_keyboard",
+      "tier": "safe",
+      "status": "pass",
+      "ms": 20,
+      "detail": {
+        "key": "Escape"
+      }
+    },
+    {
+      "category": "UI Automation",
+      "tool": "ui_scroll",
+      "tier": "safe",
+      "status": "pass",
+      "ms": 43,
+      "detail": {
+        "ok": true
+      }
+    },
+    {
+      "category": "UI Automation",
+      "tool": "ui_mouse_click",
+      "tier": "reversible",
+      "status": "fail",
+      "ms": 1,
+      "error": "getChartApi is not defined"
+    },
+    {
+      "category": "UI Automation",
+      "tool": "ui_type_text",
+      "tier": "destructive",
+      "status": "skip",
+      "reason": "types into whatever element currently has focus, which this harness does not control — too risky to run unattended"
+    },
+    {
+      "category": "UI Automation",
+      "tool": "ui_fullscreen",
+      "tier": "reversible",
+      "status": "pass",
+      "ms": 443,
+      "detail": {
+        "toggled_twice": true
+      }
+    },
+    {
+      "category": "UI Automation",
+      "tool": "ui_open_panel",
+      "tier": "reversible",
+      "status": "fail",
+      "ms": 111,
+      "error": "Button not found for panel: watchlist"
+    },
+    {
+      "category": "Layout",
+      "tool": "layout_list",
+      "tier": "safe",
+      "status": "pass",
+      "ms": 164,
+      "detail": {
+        "count": 5
+      }
+    },
+    {
+      "category": "Layout",
+      "tool": "layout_switch",
+      "tier": "reversible",
+      "status": "fail",
+      "ms": 8168,
+      "error": "getSavedCharts timed out"
+    },
+    {
+      "category": "Panes",
+      "tool": "pane_list",
+      "tier": "safe",
+      "status": "pass",
+      "ms": 2,
+      "detail": {
+        "layout": "s",
+        "panes": 1
+      }
+    },
+    {
+      "category": "Panes",
+      "tool": "pane_set_layout",
+      "tier": "reversible",
+      "status": "pass",
+      "ms": 2327,
+      "detail": {
+        "verified": "2h",
+        "restored": "s"
+      }
+    },
+    {
+      "category": "Panes",
+      "tool": "pane_focus",
+      "tier": "safe",
+      "status": "pass",
+      "ms": 2,
+      "detail": {
+        "ok": true
+      }
+    },
+    {
+      "category": "Panes",
+      "tool": "pane_set_symbol",
+      "tier": "reversible",
+      "status": "pass",
+      "ms": 2746,
+      "detail": {
+        "verified": "AAPL",
+        "restored": "NASDAQ:TSLA"
+      }
+    },
+    {
+      "category": "Tabs",
+      "tool": "tab_list",
+      "tier": "safe",
+      "status": "pass",
+      "ms": 0,
+      "detail": {
+        "count": 1
+      }
+    },
+    {
+      "category": "Tabs",
+      "tool": "tab_new",
+      "tier": "reversible",
+      "status": "fail",
+      "ms": 2524,
+      "error": "ground truth: tab count went 1 -> 1, expected +1"
+    },
+    {
+      "category": "Tabs",
+      "tool": "tab_switch",
+      "tier": "safe",
+      "status": "skip",
+      "reason": "tab_new did not add a tab to switch between"
+    },
+    {
+      "category": "Tabs",
+      "tool": "tab_close",
+      "tier": "reversible",
+      "status": "skip",
+      "reason": "tab_new did not add a tab to close"
+    },
+    {
+      "category": "Options",
+      "tool": "options_greeks",
+      "tier": "safe",
+      "status": "fail",
+      "ms": 6,
+      "error": "spawn failed: spawn C:/Data/Hermes/hermes-agent/venv/Scripts/python.exe ENOENT"
+    },
+    {
+      "category": "Options",
+      "tool": "options_expirations",
+      "tier": "safe",
+      "status": "skip",
+      "reason": "data provider unavailable/errored (likely env-specific, not a code bug): spawn failed: spawn C:/Data/Hermes/hermes-agent/venv/Scripts/python.exe ENOENT"
+    },
+    {
+      "category": "Options",
+      "tool": "options_chain",
+      "tier": "safe",
+      "status": "skip",
+      "reason": "data provider unavailable/errored (likely env-specific, not a code bug): spawn failed: spawn C:/Data/Hermes/hermes-agent/venv/Scripts/python.exe ENOENT"
+    },
+    {
+      "category": "Options",
+      "tool": "options_screen",
+      "tier": "safe",
+      "status": "skip",
+      "reason": "data provider unavailable/errored (likely env-specific, not a code bug): spawn failed: spawn C:/Data/Hermes/hermes-agent/venv/Scripts/python.exe ENOENT"
+    }
+  ]
+}

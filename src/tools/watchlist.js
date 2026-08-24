@@ -8,6 +8,13 @@ export function registerWatchlistTools(server) {
     catch (err) { return jsonResult({ success: false, error: err.message }, true); }
   });
 
+  server.tool('watchlist_switch', 'Switch to a different TradingView watchlist by name', {
+    name: z.string().describe('Name of the watchlist to switch to (e.g., "Stocks", "Crypto")'),
+  }, async ({ name }) => {
+    try { return jsonResult(await core.switchList({ name })); }
+    catch (err) { return jsonResult({ success: false, error: err.message }, true); }
+  });
+
   server.tool('watchlist_add', 'Add a symbol to the TradingView watchlist', {
     symbol: z.string().describe('Symbol to add (e.g., AAPL, BTCUSD, ES1!, NYMEX:CL1!)'),
   }, async ({ symbol }) => {

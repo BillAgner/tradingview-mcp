@@ -190,29 +190,53 @@ export async function layoutList() {
 
 export async function layoutSwitch({ name }) {
   const escaped = JSON.stringify(name);
+  // 2026-08-19: previous code armed a single 8s setTimeout for the whole Promise.
+  // getSavedCharts often returned quickly, then loadChartFromServer took >8s
+  // (especially when already on the target layout / under UI load), and the timer
+  // resolved first with a misleading "getSavedCharts timed out". The real load
+  // could still complete later as a zombie dialog. Split the budgets: clear the
+  // getSavedCharts timer when its callback fires; only then wait on load with its
+  // own 30s timeout. settled-guard prevents double-resolve.
   const result = await evaluateAsync(`
     new Promise(function(resolve) {
+      var settled = false;
+      var getChartsTimer = null;
+      var loadTimer = null;
+      function done(value) {
+        if (settled) return;
+        settled = true;
+        if (getChartsTimer) clearTimeout(getChartsTimer);
+        if (loadTimer) clearTimeout(loadTimer);
+        resolve(value);
+      }
       try {
         var target = ${escaped};
+        getChartsTimer = setTimeout(function() {
+          done({success: false, error: 'getSavedCharts timed out', source: 'internal_api'});
+        }, 8000);
         window.TradingViewApi.getSavedCharts(function(charts) {
-          if (!charts || !Array.isArray(charts)) { resolve({success: false, error: 'getSavedCharts returned no data', source: 'internal_api'}); return; }
+          if (settled) return;
+          if (getChartsTimer) { clearTimeout(getChartsTimer); getChartsTimer = null; }
+          if (!charts || !Array.isArray(charts)) { done({success: false, error: 'getSavedCharts returned no data', source: 'internal_api'}); return; }
           var match = null;
-          if (/^\\d+$/.test(target)) { for (var k = 0; k < charts.length; k++) { if (String(charts[k].id) === target) { match = charts[k]; break; } } }
+          if (/^\d+$/.test(target)) { for (var k = 0; k < charts.length; k++) { if (String(charts[k].id) === target) { match = charts[k]; break; } } }
           if (!match) { for (var i = 0; i < charts.length; i++) { var cname = charts[i].name || charts[i].title || ''; if (cname === target || cname.toLowerCase() === target.toLowerCase()) { match = charts[i]; break; } } }
           if (!match) { for (var j = 0; j < charts.length; j++) { var cn = (charts[j].name || charts[j].title || '').toLowerCase(); if (cn.indexOf(target.toLowerCase()) !== -1) { match = charts[j]; break; } } }
-          if (!match) { resolve({success: false, error: 'Layout "' + target + '" not found.', source: 'internal_api'}); return; }
+          if (!match) { done({success: false, error: 'Layout "' + target + '" not found.', source: 'internal_api'}); return; }
           // loadChartFromServer needs the FULL saved-chart object (it reads match.url to build
           // the "/chart/<url>/" request); passing a bare id/string leaves that undefined and the
           // internal fetch 404s on "/chart/undefined/json/" — silently, since the call was never awaited.
+          loadTimer = setTimeout(function() {
+            done({success: false, error: 'loadChartFromServer timed out after 30000ms', source: 'internal_api', id: match.id, name: match.name || match.title});
+          }, 30000);
           window.TradingViewApi.loadChartFromServer(match)
-            .then(function() { resolve({success: true, method: 'loadChartFromServer', id: match.id, name: match.name || match.title, source: 'internal_api'}); })
+            .then(function() { done({success: true, method: 'loadChartFromServer', id: match.id, name: match.name || match.title, source: 'internal_api'}); })
             .catch(function(e) {
               var msg = (e && e.message) || (e && typeof e.status === 'number' ? ('HTTP ' + e.status + ' ' + (e.url || '')) : String(e));
-              resolve({success: false, error: 'loadChartFromServer failed: ' + msg, source: 'internal_api'});
+              done({success: false, error: 'loadChartFromServer failed: ' + msg, source: 'internal_api'});
             });
         });
-        setTimeout(function() { resolve({success: false, error: 'getSavedCharts timed out', source: 'internal_api'}); }, 8000);
-      } catch(e) { resolve({success: false, error: e.message, source: 'internal_api'}); }
+      } catch(e) { done({success: false, error: e.message, source: 'internal_api'}); }
     })
   `);
   if (!result?.success) throw new Error(result?.error || 'Unknown error switching layout');
