@@ -726,6 +726,22 @@ function parseNum(s) {
   return Number.isFinite(n) ? n : null;
 }
 
+// TradingView's chain table currently renders bid and ask as ONE merged
+// column ("Bid × Ask", cell text like "7.05 × 7.20") instead of separate
+// "Bid"/"Ask" columns -- confirmed live 2026-08-24 via a raw-cell dump
+// (header: [...,"Bid × Ask",...], sample cell "0.01 × 0.02"). Before this
+// fix, assignCell's generic path stored the whole thing under one garbage
+// key ("bid_×_ask") via parseNum, which only captures the leading number
+// (the bid) and drops the ask entirely -- fetch_options_chain_tv.mjs's DB
+// writer reads `side.bid`/`side.ask` explicitly (readFullChain.js:244-245),
+// so neither ever populated, mid/spread came out null for every contract,
+// and expected_move.py's straddle calc (needs mid > 0 on both legs) always
+// returned zero usable expirations. This is a distinct bug from the
+// 2026-08-24 11:22am "More on options" click-target fix (93c21ba) -- that
+// fix got the chain table to open at all; this fixes what's actually inside
+// it once open.
+const BID_ASK_RE = /bid.*ask/i;
+
 /**
  * Turn a raw `readChainTable()` result into structured {expiration, strike,
  * call, put} rows, splitting each row at the Strike column. Column names on
@@ -736,12 +752,23 @@ function structureRows(tableResult) {
   const leftNames = header.slice(0, strikeIdx).map((h) => h.toLowerCase().replace(/\s+/g, '_'));
   const rightNames = header.slice(strikeIdx + 1).map((h) => h.toLowerCase().replace(/\s+/g, '_'));
 
+  function assignCell(target, rawHeader, name, rawText) {
+    if (BID_ASK_RE.test(rawHeader)) {
+      // Split "7.05 × 7.20" (also tolerate an ASCII "x") into bid/ask.
+      const parts = String(rawText || '').split(/[×x]/i);
+      target.bid = parseNum(parts[0]);
+      target.ask = parseNum(parts[1]);
+      return;
+    }
+    target[name] = parseNum(rawText);
+  }
+
   return rows.map(({ expiration, cells }) => {
     const strike = parseNum(cells[strikeIdx]);
     const call = {};
-    leftNames.forEach((name, i) => { call[name] = parseNum(cells[i]); });
+    leftNames.forEach((name, i) => assignCell(call, header[i], name, cells[i]));
     const put = {};
-    rightNames.forEach((name, i) => { put[name] = parseNum(cells[strikeIdx + 1 + i]); });
+    rightNames.forEach((name, i) => assignCell(put, header[strikeIdx + 1 + i], name, cells[strikeIdx + 1 + i]));
     return { expiration, strike, call, put };
   }).filter((r) => r.strike !== null);
 }
