@@ -27,7 +27,7 @@ import { setSymbol as chartSetSymbol } from './chart.js';
 
 const RIGHT_PANEL_SELECTOR = '[class*="layout__area--right"]';
 const POLL_INTERVAL_MS = 400;
-const POLL_MAX_ATTEMPTS = 15; // ~6s total
+const POLL_MAX_ATTEMPTS = 30; // ~12s total — chain table mount after symbol switch (SILJ/SMCI 2026-08-27)
 
 async function poll(fn, maxAttempts = POLL_MAX_ATTEMPTS) {
   for (let i = 0; i < maxAttempts; i++) {
