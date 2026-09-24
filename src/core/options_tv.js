@@ -28,6 +28,25 @@ import { setSymbol as chartSetSymbol } from './chart.js';
 const RIGHT_PANEL_SELECTOR = '[class*="layout__area--right"]';
 const POLL_INTERVAL_MS = 400;
 const POLL_MAX_ATTEMPTS = 30; // ~12s total — chain table mount after symbol switch (SILJ/SMCI 2026-08-27)
+// Header-mount vs. body-hydration are two different waits: the <thead> can
+// mount in well under a second, but real bid/ask/greek data for every row
+// streams in afterward.
+//
+// CORRECTION (2026-09-19, same day): this was first set to 75 (~30s) off a
+// live measurement taken WHILE this box was also fighting a concurrent,
+// unrelated TV-Desktop automation (another cron job's watchlist switching
+// mid-read) -- that number reflects contention, not real hydration time,
+// and 75 was never load-tested against fetch_options_chain_tv.mjs's own
+// retry ladder (MAX_SYMBOL_RETRIES=3, i.e. 4 attempts/symbol): a live
+// 22-symbol run with this value took over 30 minutes and had to be killed
+// -- worst case is attempts x symbols x this budget, and it compounds
+// fast. The original 30-attempt/12s budget ran this exact job reliably
+// for months before the 2026-09-15 regression (see JOB_CATALOG.md), so
+// the real defect was the false-positive accept, not an undersized
+// timeout. Split the difference (some headroom, not 2.5x) rather than
+// reverting to exactly 30, and re-measure cleanly (no concurrent TV job)
+// before changing this again.
+const CHAIN_HYDRATE_MAX_ATTEMPTS = 40; // ~16s total
 
 async function poll(fn, maxAttempts = POLL_MAX_ATTEMPTS) {
   for (let i = 0; i < maxAttempts; i++) {
@@ -59,6 +78,27 @@ async function isRightPanelOpen() {
       return !!(el && el.getBoundingClientRect().width > 100);
     })()
   `);
+}
+
+
+/** Dense 0DTE / scoped snaps: OPTIONS_CHAIN_FRONT_ONLY=1 keeps the chain on the
+ *  nearest (already-open) expiration and skips expanding every expiry group.
+ *  That expand loop is what pushed TSLA dense snaps to 50-70m wall. */
+function frontOnlyMode() {
+  const v = String(process.env.OPTIONS_CHAIN_FRONT_ONLY || '').trim().toLowerCase();
+  return v === '1' || v === 'true' || v === 'yes';
+}
+
+/** FRONT_ONLY_RECOVERY_20260917: America/New_York calendar date for 0DTE front pick. */
+function todayEtYmd(now = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(now);
+  const get = (t) => parts.find((p) => p.type === t)?.value;
+  return `${get('year')}-${get('month')}-${get('day')}`;
 }
 
 async function ensureRightPanelOpen() {
@@ -314,7 +354,16 @@ export async function ensureOptionsChainOpen({ symbol }) {
   // fetch_options_chain_tv.mjs capture job) sees the full chain, not just
   // the narrow default window. Safe to call even when already_open, since
   // it no-ops if the pills already read "All expirations"/"All strikes".
-  await ensureAllExpirationsAndStrikes();
+  // Front-only (dense 0DTE): leave expiry on nearest/default; still widen strikes
+  // so ATM board is complete without expanding every expiry group.
+  if (frontOnlyMode()) {
+    const before = await readChainFilterPills();
+    if (before.strikes && !/all strikes/i.test(before.strikes)) {
+      await setChainFilterRange('strikes-filter', 'All strikes');
+    }
+  } else {
+    await ensureAllExpirationsAndStrikes();
+  }
 
   return { success: true, symbol, already_open: alreadyOpen };
 }
@@ -492,6 +541,17 @@ async function readFullChain() {
   // fresh open-transition wait applied), the table can momentarily not be
   // mounted yet — confirmed live 2026-07-31 as a real, reproducible race,
   // not a hypothetical.
+  //
+  // ROOT CAUSE (2026-09-19, confirmed live): the <thead>/"Strike" header
+  // mounts and satisfies `r.found` well before TradingView streams in any
+  // <tbody> rows. The old check (`r.found ? r : null`) accepted that
+  // header-only snapshot immediately, so window.__tvChainRows/
+  // __tvChainGroupTds were captured empty and never rescanned -- both the
+  // expand loop below and frontOnlyMode()'s reader then had nothing to
+  // work with, producing a false "zero rows" failure on every symbol
+  // regardless of front-only mode. Fix: keep polling (same 30x400ms=12s
+  // budget) until the header AND at least one row/group have rendered.
+  let headerSeen = false;
   const init = await poll(async () => {
     await dismissSaveLayoutPromptIfPresent();
     const r = await evaluate(`
@@ -503,9 +563,9 @@ async function readFullChain() {
         if (el.children.length === 0 && /^.{0,3}strike$/i.test((el.textContent||'').trim())) { strikeTh = el; break; }
       }
       if (!strikeTh) return { found: false, reason: '"Strike" header cell not found' };
-      var table = strikeTh.closest('table');
-      if (!table) return { found: false, reason: 'Strike header is not inside a <table>' };
-      var thead = table.querySelector('thead');
+      var headerTable = strikeTh.closest('table');
+      if (!headerTable) return { found: false, reason: 'Strike header is not inside a <table>' };
+      var thead = headerTable.querySelector('thead');
       if (!thead) return { found: false, reason: 'no <thead>' };
       var headerRows = thead.querySelectorAll('tr');
       var headerRow = headerRows[headerRows.length - 1];
@@ -513,6 +573,30 @@ async function readFullChain() {
       for (var h = 0; h < headerRow.children.length; h++) headerCells.push(headerRow.children[h].textContent.trim());
       var strikeIdx = headerCells.findIndex(function(t) { return /strike/i.test(t); });
       if (strikeIdx === -1) return { found: false, reason: 'Strike column not found in header row' };
+
+      // ROOT CAUSE (2026-09-21, confirmed live via getBoundingClientRect +
+      // tbody count on both): the chain grid renders its frozen header row
+      // and its scrollable body as TWO SEPARATE <table> elements (header:
+      // ~80px tall, 0 <tbody>; body: 1000px+ tall, many <tbody> groups).
+      // headerTable above only ever contains the header <tr>, never real
+      // data rows, no matter how long you wait -- this is what made the
+      // 2026-09-19 "keep polling for initial_row_count > 0" fix time out
+      // deterministically on every symbol rather than intermittently: it
+      // was polling the wrong table. Find the real body table by column
+      // count instead of assuming it's the same table as the header --
+      // the header's ~10+ column count makes an accidental match on an
+      // unrelated table (e.g. a small canvas-based widget table elsewhere
+      // on the page) implausible.
+      var table = headerTable;
+      var candidateTables = document.querySelectorAll('table');
+      for (var ct = 0; ct < candidateTables.length && table === headerTable; ct++) {
+        var cand = candidateTables[ct];
+        if (cand === headerTable) continue;
+        var candTrs = cand.querySelectorAll('tr');
+        for (var ctr = 0; ctr < candTrs.length; ctr++) {
+          if (candTrs[ctr].children.length === headerCells.length) { table = cand; break; }
+        }
+      }
 
       window.__tvExtractRow = function(tr) {
         var vals = [];
@@ -535,18 +619,34 @@ async function readFullChain() {
 
       window.__tvChainRows = [];
       window.__tvChainGroupTds = []; // live element refs, open AND closed
-      var allExpGroups = [];
+      var allExpGroups = []; window.__tvChainAllExpGroups = allExpGroups;
       var bodies = table.querySelectorAll('tbody');
+      // Fallback-to-whole-table (no <tbody> yet, e.g. before the body has
+      // hydrated at all) must still skip the <thead> row itself -- without
+      // this guard, the header row's own cell count trivially equals
+      // headerCells.length and gets miscounted as one real "data row"
+      // (its cell text, e.g. "Strike", then fails to parse as a strike
+      // price and is silently dropped later) -- confirmed live 2026-09-19,
+      // this produced a false-positive initial_row_count of 1 with zero
+      // real rows, masking the fact that the body genuinely hadn't mounted.
       var bodySource = bodies.length > 0 ? bodies : [table];
       for (var b = 0; b < bodySource.length; b++) {
         var trs = bodySource[b].querySelectorAll('tr');
         var currentExp = null;
         for (var r = 0; r < trs.length; r++) {
           var tr = trs[r];
+          if (tr.closest('thead')) continue;
           if (tr.children.length !== headerCells.length) {
             var groupTd = tr.querySelector('td[data-cell-id]');
             var cellId = groupTd ? groupTd.getAttribute('data-cell-id') : null;
-            var dateMatch = cellId && cellId.match(/;(\\d{4})(\\d{2})(\\d{2})$/);
+            var dateMatch = null;
+            if (cellId) {
+              dateMatch = cellId.match(/;(\\d{4})(\\d{2})(\\d{2})$/) || cellId.match(/(\\d{4})-(\\d{2})-(\\d{2})/) || cellId.match(/(?:^|[^0-9])(\\d{4})(\\d{2})(\\d{2})(?:[^0-9]|$)/);
+            }
+            if (!dateMatch && groupTd) {
+              var label = (groupTd.innerText || groupTd.textContent || '').trim();
+              dateMatch = label.match(/(\\d{4})-(\\d{2})-(\\d{2})/) || label.match(/(?:^|[^0-9])(\\d{4})(\\d{2})(\\d{2})(?:[^0-9]|$)/);
+            }
             if (dateMatch) {
               currentExp = dateMatch[1] + '-' + dateMatch[2] + '-' + dateMatch[3];
               allExpGroups.push(currentExp);
@@ -561,35 +661,220 @@ async function readFullChain() {
       return { found: true, header: headerCells, strike_index: strikeIdx, all_expiration_groups: allExpGroups, closed_group_count: window.__tvChainGroupTds.filter(function(td){ return td.className.indexOf('groupOpened') === -1; }).length, initial_row_count: window.__tvChainRows.length };
     })()
     `);
-    return r.found ? r : null;
-  });
-  if (!init) return { found: false, reason: '"Strike" header cell not found after retries — chain table did not mount' };
+    if (r.found) headerSeen = true;
+    // Header cell and group-separator rows can both mount before any real
+    // per-strike data row does (confirmed live 2026-09-19 — group headers
+    // exist independent of their row data per getExpirations' own doc
+    // comment above). Only initial_row_count is proof real data arrived;
+    // require it explicitly instead of accepting a header/group-only scan.
+    return (r.found && r.initial_row_count > 0) ? r : null;
+  }, CHAIN_HYDRATE_MAX_ATTEMPTS);
+  if (!init) {
+    return {
+      found: false,
+      reason: headerSeen
+        ? '"Strike" header mounted but no expiration groups/rows ever rendered after retries — chain body did not hydrate'
+        : '"Strike" header cell not found after retries — chain table did not mount',
+    };
+  }
 
   // Expand every closed group, reading its rows immediately afterward
   // (before scrolling elsewhere risks virtualizing them back out).
-  for (let i = 0; i < 30; i++) {
+  // Front-only: nearest expiry rows are already populated — skip expand loop.
+  if (frontOnlyMode()) {
+    // FRONT_ONLY_RECOVERY_20260917: prefer today ET; recover when group headers
+    // fail to parse (front=n/a) so dense 0DTE does not return zero rows.
+    let rows = await evaluate(`window.__tvChainRows`);
+    let groups = [...(init.all_expiration_groups || [])];
+    const today = todayEtYmd();
+
+    // If no group dates parsed but closed groups exist, open the first one once
+    // and re-harvest rows/dates (still O(1) — not the full expand wall).
+    if (groups.length === 0 && (init.closed_group_count || 0) > 0) {
+      const next = await evaluate(`
+        (function() {
+          for (var i = 0; i < (window.__tvChainGroupTds || []).length; i++) {
+            var td = window.__tvChainGroupTds[i];
+            if (String(td.className || '').indexOf('groupOpened') === -1) {
+              var inner = td.querySelector('[class*="groupContent"]') || td;
+              inner.scrollIntoView({ block: 'center' });
+              var r = inner.getBoundingClientRect();
+              return { idx: i, x: r.x + r.width / 2, y: r.y + r.height / 2 };
+            }
+          }
+          return null;
+        })()
+      `);
+      if (next) {
+        await new Promise((r) => setTimeout(r, 300));
+        await realClickAt(next.x, next.y);
+        await new Promise((r) => setTimeout(r, 700));
+        await evaluate(`
+          (function() {
+            var td = window.__tvChainGroupTds[${next.idx}];
+            var tbody = td && td.closest('tbody');
+            if (!tbody) return 0;
+            var headerLen = ${JSON.stringify(init.header)}.length;
+            var trs = tbody.querySelectorAll('tr');
+            var exp = null;
+            var cellId = td.getAttribute('data-cell-id');
+            var dateMatch = cellId && (cellId.match(/;(\\d{4})(\\d{2})(\\d{2})$/) || cellId.match(/(\\d{4})-(\\d{2})-(\\d{2})/) || cellId.match(/(?:^|[^0-9])(\\d{4})(\\d{2})(\\d{2})(?:[^0-9]|$)/));
+            if (!dateMatch) {
+              var label = (td.innerText || td.textContent || '').trim();
+              dateMatch = label.match(/(\\d{4})-(\\d{2})-(\\d{2})/) || label.match(/(?:^|[^0-9])(\\d{4})(\\d{2})(\\d{2})(?:[^0-9]|$)/);
+            }
+            if (dateMatch) exp = dateMatch[1] + '-' + dateMatch[2] + '-' + dateMatch[3];
+            var added = 0;
+            for (var r = 0; r < trs.length; r++) {
+              var tr = trs[r];
+              if (tr.children.length !== headerLen) continue;
+              window.__tvChainRows.push({ expiration: exp, cells: window.__tvExtractRow(tr) });
+              added++;
+            }
+            window.__tvChainAllExpGroups = window.__tvChainAllExpGroups || [];
+            if (exp && window.__tvChainAllExpGroups.indexOf(exp) === -1) window.__tvChainAllExpGroups.push(exp);
+            return added;
+          })()
+        `);
+        rows = await evaluate(`window.__tvChainRows`);
+        groups = await evaluate(`window.__tvChainAllExpGroups || []`) || [];
+        console.error(`OPTIONS_TV_FRONT_ONLY: recovered via one-group open groups=${groups.length}`);
+      }
+    }
+
+    // Derive front: prefer today ET, else first group, else first row expiration.
+    let front = groups.find((g) => g === today) || groups[0] || null;
+    if (!front) {
+      const fromRows = [...new Set(rows.map((r) => r.expiration).filter(Boolean))].sort();
+      front = fromRows.find((g) => g === today) || fromRows[0] || null;
+    }
+    // Last resort: stamp null-expiration strike rows as today (nearest board).
+    if (!front) {
+      front = today;
+      rows = rows.map((r) => (r.expiration ? r : { ...r, expiration: today }));
+      console.error(`OPTIONS_TV_FRONT_ONLY: stamped null expirations with today_ET=${today}`);
+    } else {
+      rows = rows.map((r) => (r.expiration ? r : { ...r, expiration: front }));
+    }
+
+    let filtered = rows.filter((r) => r.expiration === front);
+
+    // ROOT CAUSE (2026-09-21, confirmed live): the chain grid virtualizes
+    // row rendering to whatever is near the current scroll position --
+    // independent of a group's "opened" state. The front group's header
+    // can be present (and even marked groupOpened) in window.__tvChainRows
+    // while its actual data-row <tr>s were never mounted at all, because
+    // the viewport happened to be scrolled to a different group when the
+    // initial hydrate snapshot was taken (confirmed: a group's own tbody
+    // had only its header <tr>, zero data rows, while showing
+    // groupOpened-* in its class list). Scrolling that exact group into
+    // view (no click -- it's already open, and clicking an open group
+    // would close it) forces it to mount, then it can be harvested fresh.
+    if (filtered.length === 0 && front) {
+      const scrolled = await evaluate(`
+        (function() {
+          var tds = window.__tvChainGroupTds || [];
+          for (var i = 0; i < tds.length; i++) {
+            var td = tds[i];
+            if (!td) continue;
+            var cellId = td.getAttribute('data-cell-id');
+            if (cellId && cellId.indexOf(${JSON.stringify(front.replace(/-/g, ''))}) === -1) continue;
+            var inner = td.querySelector('[class*="groupContent"]') || td;
+            inner.scrollIntoView({ block: 'center' });
+            return true;
+          }
+          return false;
+        })()
+      `);
+      if (scrolled) {
+        await new Promise((r) => setTimeout(r, 700));
+        const harvested = await evaluate(`
+          (function() {
+            var tds = window.__tvChainGroupTds || [];
+            var headerLen = ${JSON.stringify(init.header)}.length;
+            var added = [];
+            for (var i = 0; i < tds.length; i++) {
+              var td = tds[i];
+              if (!td) continue;
+              var cellId = td.getAttribute('data-cell-id');
+              if (!cellId || cellId.indexOf(${JSON.stringify(front.replace(/-/g, ''))}) === -1) continue;
+              var tbody = td.closest('tbody');
+              if (!tbody) continue;
+              var trs = tbody.querySelectorAll('tr');
+              for (var r = 0; r < trs.length; r++) {
+                var tr = trs[r];
+                if (tr.closest('thead') || tr.contains(td)) continue;
+                if (tr.children.length !== headerLen) continue;
+                added.push({ expiration: ${JSON.stringify(front)}, cells: window.__tvExtractRow(tr) });
+              }
+            }
+            return added;
+          })()
+        `);
+        if (harvested && harvested.length > 0) {
+          rows = rows.concat(harvested);
+          filtered = rows.filter((r) => r.expiration === front);
+          console.error(`OPTIONS_TV_FRONT_ONLY: recovered ${harvested.length} rows for front=${front} via scroll-into-view`);
+        }
+      }
+    }
+
+    console.error(`OPTIONS_TV_FRONT_ONLY: skip expand groups=${groups.length} front=${front || 'n/a'} today_ET=${today} rows=${filtered.length}`);
+    return { found: true, header: init.header, strike_index: init.strike_index, all_expiration_groups: front ? [front] : groups, rows: filtered, front_only: true };
+  }
+  // ROOT CAUSE (2026-09-21, confirmed live): the chain grid virtualizes row
+  // rendering to whatever is near the current scroll position, independent
+  // of a group's "opened" state -- a group already marked open at initial-
+  // hydrate time can still have zero of its data rows mounted if it wasn't
+  // scrolled into view at that exact moment (confirmed: a tbody showed
+  // groupOpened-* in its header td's class list while containing only that
+  // header row, zero data rows). The old loop below only expanded CLOSED
+  // groups and trusted the initial snapshot for already-open ones, so any
+  // group that was "open but virtualized away" at hydrate time was silently
+  // skipped forever -- this produced the non-deterministic partial results
+  // (e.g. 2337 rows across 2 groups one run, 55 rows across 1 group the
+  // next) rather than a clean, complete sweep of every known group.
+  // Fix: discard the initial partial capture and do one exhaustive sweep,
+  // scrolling every known group into view (clicking it open first only if
+  // still closed) and harvesting immediately while mounted.
+  // Both __tvChainRows and any tvHarvested markers from a prior call live in
+  // the PAGE's own JS context, not this process -- they survive across
+  // separate getChain() calls against the same still-open DOM (confirmed
+  // live: a second call in a row returned 0 rows in 10s, because every
+  // group td was already marked harvested from the first call). Clear both.
+  await evaluate(`
+    window.__tvChainRows = [];
+    (window.__tvChainGroupTds || []).forEach(function(td) { if (td) delete td.dataset.tvHarvested; });
+  `);
+  for (let i = 0; i < Math.max(30, (init.all_expiration_groups || []).length + 5); i++) {
     const next = await evaluate(`
       (function() {
-        for (var i = 0; i < window.__tvChainGroupTds.length; i++) {
-          var td = window.__tvChainGroupTds[i];
-          if (td.className.indexOf('groupOpened') === -1) {
-            var inner = td.querySelector('.groupContent-hwGhGWMB') || td;
-            inner.scrollIntoView({ block: 'center' });
-            var r = inner.getBoundingClientRect();
-            return { idx: i, x: r.x + r.width / 2, y: r.y + r.height / 2 };
-          }
+        var tds = window.__tvChainGroupTds || [];
+        for (var i = 0; i < tds.length; i++) {
+          var td = tds[i];
+          if (!td || td.dataset.tvHarvested === '1') continue;
+          var inner = td.querySelector('.groupContent-hwGhGWMB') || td;
+          var isOpen = td.className.indexOf('groupOpened') !== -1;
+          inner.scrollIntoView({ block: 'center' });
+          var r = inner.getBoundingClientRect();
+          return { idx: i, x: r.x + r.width / 2, y: r.y + r.height / 2, isOpen: isOpen };
         }
         return null;
       })()
     `);
     if (!next) break;
     await new Promise((r) => setTimeout(r, 300));
-    await realClickAt(next.x, next.y);
-    await new Promise((r) => setTimeout(r, 700));
+    if (!next.isOpen) {
+      await realClickAt(next.x, next.y);
+      await new Promise((r) => setTimeout(r, 700));
+    } else {
+      await new Promise((r) => setTimeout(r, 400));
+    }
 
     await evaluate(`
       (function() {
         var td = window.__tvChainGroupTds[${next.idx}];
+        td.dataset.tvHarvested = '1';
         var tbody = td.closest('tbody');
         if (!tbody) return 0;
         var headerLen = ${init.header.length};
@@ -601,7 +886,14 @@ async function readFullChain() {
           if (tr.children.length !== headerLen) {
             var groupTd = tr.querySelector('td[data-cell-id]');
             var cellId = groupTd ? groupTd.getAttribute('data-cell-id') : null;
-            var dateMatch = cellId && cellId.match(/;(\\d{4})(\\d{2})(\\d{2})$/);
+            var dateMatch = null;
+            if (cellId) {
+              dateMatch = cellId.match(/;(\\d{4})(\\d{2})(\\d{2})$/) || cellId.match(/(\\d{4})-(\\d{2})-(\\d{2})/) || cellId.match(/(?:^|[^0-9])(\\d{4})(\\d{2})(\\d{2})(?:[^0-9]|$)/);
+            }
+            if (!dateMatch && groupTd) {
+              var label = (groupTd.innerText || groupTd.textContent || '').trim();
+              dateMatch = label.match(/(\\d{4})-(\\d{2})-(\\d{2})/) || label.match(/(?:^|[^0-9])(\\d{4})(\\d{2})(\\d{2})(?:[^0-9]|$)/);
+            }
             if (dateMatch) exp = dateMatch[1] + '-' + dateMatch[2] + '-' + dateMatch[3];
             continue;
           }
@@ -656,11 +948,14 @@ async function readChainTable() {
       var allGroups = []; // every group date seen, open or collapsed
       var currentExpiration = null;
       var bodies = table.querySelectorAll('tbody');
+      // See readFullChain's identical fallback for why the <thead> row
+      // itself must be excluded here too (2026-09-19 fix).
       var bodySource = bodies.length > 0 ? bodies : [table];
       for (var b = 0; b < bodySource.length; b++) {
         var trs = bodySource[b].querySelectorAll('tr');
         for (var r = 0; r < trs.length; r++) {
           var tr = trs[r];
+          if (tr.closest('thead')) continue;
           var cellCount = tr.children.length;
           if (cellCount !== headerCells.length) {
             // Group-separator row (e.g. "July 31" / "0 DTE"). The real ISO
@@ -676,7 +971,14 @@ async function readChainTable() {
             // correctly skipped rather than misread as a new expiration.
             var groupTd = tr.querySelector('td[data-cell-id]');
             var cellId = groupTd ? groupTd.getAttribute('data-cell-id') : null;
-            var dateMatch = cellId && cellId.match(/;(\\d{4})(\\d{2})(\\d{2})$/);
+            var dateMatch = null;
+            if (cellId) {
+              dateMatch = cellId.match(/;(\\d{4})(\\d{2})(\\d{2})$/) || cellId.match(/(\\d{4})-(\\d{2})-(\\d{2})/) || cellId.match(/(?:^|[^0-9])(\\d{4})(\\d{2})(\\d{2})(?:[^0-9]|$)/);
+            }
+            if (!dateMatch && groupTd) {
+              var label = (groupTd.innerText || groupTd.textContent || '').trim();
+              dateMatch = label.match(/(\\d{4})-(\\d{2})-(\\d{2})/) || label.match(/(?:^|[^0-9])(\\d{4})(\\d{2})(\\d{2})(?:[^0-9]|$)/);
+            }
             if (dateMatch) {
               currentExpiration = dateMatch[1] + '-' + dateMatch[2] + '-' + dateMatch[3];
               allGroups.push(currentExpiration);

@@ -14,6 +14,7 @@
 import { z } from 'zod';
 import { jsonResult } from './_format.js';
 import * as core from '../core/options_tv.js';
+import { withLock } from '../core/lock.js';
 
 export function registerOptionsTvTools(server) {
   server.tool(
@@ -24,7 +25,7 @@ export function registerOptionsTvTools(server) {
     },
     async ({ symbol }) => {
       try {
-        return jsonResult(await core.getExpirations({ symbol }));
+        return jsonResult(await withLock(`options_tv_expirations ${symbol}`, () => core.getExpirations({ symbol })));
       } catch (err) {
         return jsonResult({ success: false, error: err.message }, true);
       }
@@ -40,7 +41,7 @@ export function registerOptionsTvTools(server) {
     },
     async ({ symbol, expiration }) => {
       try {
-        return jsonResult(await core.getStrikes({ symbol, expiration }));
+        return jsonResult(await withLock(`options_tv_strikes ${symbol}`, () => core.getStrikes({ symbol, expiration })));
       } catch (err) {
         return jsonResult({ success: false, error: err.message }, true);
       }
@@ -57,7 +58,11 @@ export function registerOptionsTvTools(server) {
     },
     async ({ symbol, expiration, strike }) => {
       try {
-        return jsonResult(await core.getChain({ symbol, expiration, strike }));
+        return jsonResult(await withLock(
+          `options_tv_chain ${symbol}`,
+          () => core.getChain({ symbol, expiration, strike }),
+          { ttlMs: 45_000 } // covers chain-hydrate wait (~16s/symbol) with margin
+        ));
       } catch (err) {
         return jsonResult({ success: false, error: err.message }, true);
       }
@@ -70,7 +75,7 @@ export function registerOptionsTvTools(server) {
     {},
     async () => {
       try {
-        return jsonResult(await core.closeOptionsChain());
+        return jsonResult(await withLock('options_tv_close', () => core.closeOptionsChain()));
       } catch (err) {
         return jsonResult({ success: false, error: err.message }, true);
       }

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { jsonResult } from './_format.js';
 import * as core from '../core/chart.js';
+import { withLock } from '../core/lock.js';
 
 export function registerChartTools(server) {
   server.tool('chart_get_state', 'Get current chart state (symbol, timeframe, chart type, indicators)', {}, async () => {
@@ -11,7 +12,7 @@ export function registerChartTools(server) {
   server.tool('chart_set_symbol', 'Change the chart symbol', {
     symbol: z.string().describe('Symbol to set (e.g., BTCUSD, AAPL, ES1!, NYMEX:CL1!)'),
   }, async ({ symbol }) => {
-    try { return jsonResult(await core.setSymbol({ symbol })); }
+    try { return jsonResult(await withLock(`chart_set_symbol ${symbol}`, () => core.setSymbol({ symbol }))); }
     catch (err) { return jsonResult({ success: false, error: err.message }, true); }
   });
 

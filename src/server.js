@@ -16,6 +16,9 @@ import { registerPaneTools } from './tools/pane.js';
 import { registerTabTools } from './tools/tab.js';
 import { registerOptionsTools } from './tools/options.js';
 import { registerOptionsTvTools } from './tools/options_tv.js';
+import { registerLockTools } from './tools/lock.js';
+import { disconnect } from './connection.js';
+import { releaseActive } from './core/lock.js';
 
 const server = new McpServer(
   {
@@ -63,6 +66,7 @@ Panes: pane_list, pane_set_layout (s, 2h, 2v, 4, 6, 8), pane_focus, pane_set_sym
 Tabs: tab_list, tab_new, tab_close, tab_switch
 Options chains: options_tv_expirations, options_tv_strikes, options_tv_chain (real TradingView bid/ask/spread/volume/IV, calls+puts), options_tv_close to return to chart.
   Prefer these over options_chain/options_expirations/options_screen/options_greeks (yfinance/Tradier-backed, calls-only) when TradingView Desktop is available.
+Shared-resource lock: tv_lock_status, tv_lock_acquire, tv_lock_release — TradingView Desktop is ONE chart shared across every Hermes profile on this machine. For a single one-off read, no lock is needed. Before any multi-step sequence (switching symbols/tabs, reading an options chain, then returning to a prior view), call tv_lock_acquire first and tv_lock_release when done, so another profile can't change the chart out from under you mid-sequence.
 
 CONTEXT MANAGEMENT:
 - ALWAYS use summary=true on data_get_ohlcv
@@ -90,10 +94,28 @@ registerPaneTools(server);
 registerTabTools(server);
 registerOptionsTools(server);
 registerOptionsTvTools(server);
+registerLockTools(server);
 
 // Startup notice (stderr so it doesn't interfere with MCP stdio protocol)
 process.stderr.write('⚠  tradingview-mcp  |  Unofficial tool. Not affiliated with TradingView Inc. or Anthropic.\n');
 process.stderr.write('   Ensure your usage complies with TradingView\'s Terms of Use.\n\n');
+
+// Release the CDP client on process termination -- previously nothing did
+// this, so a killed/orphaned server.js child kept its WebSocket to TV
+// Desktop open indefinitely (confirmed 2026-09-21: processes 1-2+ days old
+// still holding a live connection with no cron job driving them).
+for (const sig of ['SIGINT', 'SIGTERM']) {
+  process.on(sig, async () => {
+    releaseActive();
+    await disconnect().catch(() => {});
+    process.exit(0);
+  });
+}
+process.on('exit', () => {
+  // best-effort only -- disconnect() is async and 'exit' handlers can't await
+  releaseActive();
+  disconnect().catch(() => {});
+});
 
 // Start stdio transport
 const transport = new StdioServerTransport();

@@ -7,6 +7,22 @@ const CDP_PORT = 9222;
 const MAX_RETRIES = 5;
 const BASE_DELAY = 500;
 
+// A profile's tradingview-mcp process is a long-lived gateway child (runs for
+// the life of the profile session -- days, in practice) and previously never
+// let go of its CDP client once connected. Auto-disconnect after this much
+// inactivity so an idle session doesn't hold a live browser connection
+// indefinitely; getClient()/connect() transparently reconnect on next use.
+const IDLE_DISCONNECT_MS = 10 * 60 * 1000;
+let idleTimer = null;
+
+function armIdleTimer() {
+  if (idleTimer) clearTimeout(idleTimer);
+  idleTimer = setTimeout(() => {
+    disconnect().catch(() => {});
+  }, IDLE_DISCONNECT_MS);
+  idleTimer.unref?.();
+}
+
 // Known direct API paths discovered via live probing (see PROBE_RESULTS.md)
 const KNOWN_PATHS = {
   chartApi: 'window.TradingViewApi._activeChartWidgetWV.value()',
@@ -127,6 +143,7 @@ export function requireFinite(value, name) {
 }
 
 export async function getClient() {
+  armIdleTimer();
   if (client) {
     try {
       // Quick liveness check
@@ -204,6 +221,7 @@ export async function evaluateAsync(expression) {
 }
 
 export async function disconnect() {
+  if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
   if (client) {
     try { await client.close(); } catch {}
     client = null;
