@@ -48,6 +48,55 @@ const POLL_MAX_ATTEMPTS = 30; // ~12s total — chain table mount after symbol s
 // before changing this again.
 const CHAIN_HYDRATE_MAX_ATTEMPTS = 40; // ~16s total
 
+// QUOTE_WAIT_20260925: the chain DOM (strike rows) mounts before bid/ask quotes
+// stream in. First run of the day (b72a ~06:35 PT) harvested front expiries with
+// 100% null bid/ask (MSTR 0/230, SILJ 0/78, SMCI 0/124) because a group was read
+// after a fixed 400ms settle. Now each expanded group is polled (250ms steps, cap
+// 4s/group, 8s/symbol total) until at least one bid/ask cell has a digit. A
+// group still unpriced at timeout is returned (rows kept) but listed in
+// unpriced_groups / group_quote_status[].priced=false so the caller can retry.
+const QUOTE_WAIT_STEP_MS = 250;
+const QUOTE_WAIT_GROUP_MS = 4000;
+const QUOTE_WAIT_SYMBOL_MS = 8000;
+
+function bidAskIndices(header) {
+  const out = [];
+  (header || []).forEach((h, i) => { if (/bid|ask/i.test(String(h || ''))) out.push(i); });
+  return out;
+}
+
+function rowsHavePrice(rows, idxs) {
+  if (!idxs.length) return true; // no bid/ask column found -- cannot judge, do not block
+  return (rows || []).some((r) => idxs.some((i) => /\d/.test(String(((r && r.cells) || [])[i] ?? ''))));
+}
+
+/** QUOTE_WAIT_20260925: live re-read of one expiry group's mounted data rows (by data-cell-id date). */
+async function readGroupRowsLive(ymd, headerLen) {
+  return evaluate(`
+    (function() {
+      var tds = window.__tvChainGroupTds || [];
+      var key = ${JSON.stringify(String(ymd || '').replace(/-/g, ''))};
+      var out = [];
+      for (var i = 0; i < tds.length; i++) {
+        var td = tds[i];
+        if (!td) continue;
+        var cellId = td.getAttribute('data-cell-id');
+        if (!cellId || cellId.indexOf(key) === -1) continue;
+        var tbody = td.closest('tbody');
+        if (!tbody) continue;
+        var trs = tbody.querySelectorAll('tr');
+        for (var r = 0; r < trs.length; r++) {
+          var tr = trs[r];
+          if (tr.closest('thead') || tr.contains(td)) continue;
+          if (tr.children.length !== ${Number(headerLen) || 0}) continue;
+          out.push({ expiration: ${JSON.stringify(ymd)}, cells: window.__tvExtractRow(tr) });
+        }
+      }
+      return out;
+    })()
+  `);
+}
+
 async function poll(fn, maxAttempts = POLL_MAX_ATTEMPTS) {
   for (let i = 0; i < maxAttempts; i++) {
     const result = await fn();
@@ -261,10 +310,58 @@ async function findMoreOnOptionsCoords() {
   `);
 }
 
+async function pointOwner(x, y) {
+  return evaluate(`
+    (function() {
+      var hit = document.elementFromPoint(${Number(x)}, ${Number(y)});
+      if (!hit) return { text: '', cls: '' };
+      return {
+        text: (hit.textContent || '').trim().replace(/\\s+/g, ' ').slice(0, 80),
+        cls: String(hit.className || '').slice(0, 60),
+      };
+    })()
+  `);
+}
+
+async function dismissClickBlocker() {
+  const coords = await evaluate(`
+    (function() {
+      var wants = ["Don't need", "Don't need this", "Not now", "Maybe later", "No thanks", "Close"];
+      var buttons = document.querySelectorAll('button, [role="button"]');
+      for (var i = 0; i < buttons.length; i++) {
+        var b = buttons[i];
+        var t = (b.textContent || '').replace(/\\s+/g, ' ').trim();
+        if (wants.indexOf(t) === -1) continue;
+        var r = b.getBoundingClientRect();
+        if (r.width < 2 || r.height < 2) continue;
+        return { found: true, x: r.x + r.width / 2, y: r.y + r.height / 2, t: t };
+      }
+      return { found: false };
+    })()
+  `);
+  if (!coords || !coords.found) return null;
+  await realClickAt(coords.x, coords.y);
+  await new Promise((r) => setTimeout(r, 800));
+  return coords.t;
+}
+
 async function findAndClickMoreOnOptions() {
   const coords = await findMoreOnOptionsCoords();
   if (!coords.found) return coords;
-  await new Promise((r) => setTimeout(r, 300)); // let scrollIntoView settle
+  await new Promise((r) => setTimeout(r, 300));
+  const hit = await pointOwner(coords.x, coords.y);
+  const hitText = (hit && hit.text) || '';
+  if (!/more on options|more about options/i.test(hitText)) {
+    const dismissed = await dismissClickBlocker();
+    console.log('CHAIN_CLICK_BLOCKED hit=' + JSON.stringify(hit || {}) + ' dismissed=' + (dismissed || 'none'));
+    if (!dismissed) {
+      return { found: false, reason: 'click point covered: ' + hitText.slice(0, 60) };
+    }
+    const again = await findMoreOnOptionsCoords();
+    if (!again.found) return again;
+    await realClickAt(again.x, again.y);
+    return { found: true, unblocked: dismissed };
+  }
   await realClickAt(coords.x, coords.y);
   return { found: true };
 }
@@ -272,10 +369,24 @@ async function findAndClickMoreOnOptions() {
 async function isOnChainView() {
   return evaluate(`
     (function() {
+      function vis(el) {
+        var r = el.getBoundingClientRect();
+        return r.width > 2 && r.height > 2;
+      }
+      // TV_BACK_ARIA_20261026: close control is now an icon-only button with aria-label.
+      var ariaBack = document.querySelector('button[aria-label="Back to chart"], [role="button"][aria-label="Back to chart"]');
+      if (ariaBack && vis(ariaBack)) return true;
       var all = document.querySelectorAll('*');
       for (var i = 0; i < all.length; i++) {
         var el = all[i];
-        if (el.children.length <= 1 && /^back to chart$/i.test((el.textContent || '').trim())) return true;
+        if (el.children.length <= 1 && /^back to chart$/i.test((el.textContent || '').trim()) && vis(el)) return true;
+      }
+      // 2026-10-23: every optionable name clicked More and this detector
+      // stayed false. A mounted Strike header is the chain view even if
+      // the back-button leaf text no longer matches exactly.
+      var ths = document.querySelectorAll('th');
+      for (var j = 0; j < ths.length; j++) {
+        if ((ths[j].textContent || '').trim() === 'Strike' && vis(ths[j])) return true;
       }
       return false;
     })()
@@ -285,6 +396,12 @@ async function isOnChainView() {
 async function clickBackToChart() {
   const coords = await evaluate(`
     (function() {
+      // TV_BACK_ARIA_20261026: icon-only close button, match by aria-label first.
+      var ariaBack = document.querySelector('button[aria-label="Back to chart"], [role="button"][aria-label="Back to chart"]');
+      if (ariaBack) {
+        var ar = ariaBack.getBoundingClientRect();
+        if (ar.width > 2 && ar.height > 2) return { found: true, x: ar.x + ar.width / 2, y: ar.y + ar.height / 2 };
+      }
       var all = document.querySelectorAll('*');
       for (var i = 0; i < all.length; i++) {
         var el = all[i];
@@ -819,8 +936,32 @@ async function readFullChain() {
       }
     }
 
+    // QUOTE_WAIT_20260925 (front-only): rows can be mounted with every bid/ask
+    // still blank. Poll the live front group (<=4s) until any quote lands.
+    const qwIdxF = bidAskIndices(init.header);
+    let qwWaitedF = 0;
+    let frontPriced = rowsHavePrice(filtered, qwIdxF);
+    while (!frontPriced && front && filtered.length > 0 && qwWaitedF < QUOTE_WAIT_GROUP_MS) {
+      await new Promise((r) => setTimeout(r, QUOTE_WAIT_STEP_MS));
+      qwWaitedF += QUOTE_WAIT_STEP_MS;
+      const fresh = await readGroupRowsLive(front, init.header.length);
+      if (!fresh || fresh.length === 0) break; // group td not addressable (e.g. stamped today_ET) -- cannot refresh
+      if (rowsHavePrice(fresh, qwIdxF) || fresh.length >= filtered.length) {
+        rows = rows.filter((r) => r.expiration !== front).concat(fresh);
+        filtered = fresh;
+      }
+      frontPriced = rowsHavePrice(filtered, qwIdxF);
+    }
+    const frontUnpriced = (front && filtered.length > 0 && !frontPriced) ? [front] : [];
+    if (frontUnpriced.length) console.error(`OPTIONS_TV_QUOTE_WAIT: front=${front} still unpriced after ${qwWaitedF}ms rows=${filtered.length}`);
     console.error(`OPTIONS_TV_FRONT_ONLY: skip expand groups=${groups.length} front=${front || 'n/a'} today_ET=${today} rows=${filtered.length}`);
-    return { found: true, header: init.header, strike_index: init.strike_index, all_expiration_groups: front ? [front] : groups, rows: filtered, front_only: true };
+    return {
+      found: true, header: init.header, strike_index: init.strike_index, all_expiration_groups: front ? [front] : groups, rows: filtered, front_only: true,
+      group_quote_status: front ? [{ expiration: front, priced: frontPriced, waited_ms: qwWaitedF, rows: filtered.length }] : [],
+      unpriced_groups: frontUnpriced,
+      quote_complete: frontUnpriced.length === 0,
+      quote_wait: { marker: 'QUOTE_WAIT_20260925', spent_ms: qwWaitedF, budget_exhausted: qwWaitedF >= QUOTE_WAIT_GROUP_MS, bid_ask_columns: qwIdxF.length },
+    };
   }
   // ROOT CAUSE (2026-09-21, confirmed live): the chain grid virtualizes row
   // rendering to whatever is near the current scroll position, independent
@@ -846,6 +987,10 @@ async function readFullChain() {
     window.__tvChainRows = [];
     (window.__tvChainGroupTds || []).forEach(function(td) { if (td) delete td.dataset.tvHarvested; });
   `);
+  // QUOTE_WAIT_20260925 (full sweep) state; per-symbol cap QUOTE_WAIT_SYMBOL_MS.
+  const qwIdx = bidAskIndices(init.header);
+  let qwSpent = 0;
+  const groupQuoteStatus = [];
   for (let i = 0; i < Math.max(30, (init.all_expiration_groups || []).length + 5); i++) {
     const next = await evaluate(`
       (function() {
@@ -871,7 +1016,42 @@ async function readFullChain() {
       await new Promise((r) => setTimeout(r, 400));
     }
 
-    await evaluate(`
+    // QUOTE_WAIT_20260925: 0 = no data rows mounted, 1 = rows but no bid/ask digit yet, 2 = priced.
+    let qwWaited = 0;
+    let qwState = qwIdx.length === 0 ? 2 : 0;
+    while (qwState !== 2) {
+      qwState = await evaluate(`
+        (function() {
+          var td = window.__tvChainGroupTds[${next.idx}];
+          var tbody = td && td.closest('tbody');
+          if (!tbody) return 0;
+          var hl = ${init.header.length};
+          var idxs = ${JSON.stringify(qwIdx)};
+          var trs = tbody.querySelectorAll('tr');
+          var sawRow = false;
+          for (var r = 0; r < trs.length; r++) {
+            var tr = trs[r];
+            if (tr.children.length !== hl) continue;
+            sawRow = true;
+            for (var k = 0; k < idxs.length; k++) {
+              var cell = tr.children[idxs[k]];
+              if (!cell) continue;
+              var tt = cell.querySelector('[data-overflow-tooltip-text]');
+              var t = tt ? tt.getAttribute('data-overflow-tooltip-text') : (cell.innerText || cell.textContent || '');
+              if (/\\d/.test(t)) return 2;
+            }
+          }
+          return sawRow ? 1 : 0;
+        })()
+      `);
+      if (qwState === 2) break;
+      if (qwWaited >= QUOTE_WAIT_GROUP_MS || qwSpent >= QUOTE_WAIT_SYMBOL_MS) break;
+      await new Promise((r) => setTimeout(r, QUOTE_WAIT_STEP_MS));
+      qwWaited += QUOTE_WAIT_STEP_MS;
+      qwSpent += QUOTE_WAIT_STEP_MS;
+    }
+
+    const qwAdded = await evaluate(`
       (function() {
         var td = window.__tvChainGroupTds[${next.idx}];
         td.dataset.tvHarvested = '1';
@@ -903,10 +1083,19 @@ async function readFullChain() {
         return added;
       })()
     `);
+    groupQuoteStatus.push({ expiration: (init.all_expiration_groups || [])[next.idx] || `group_${next.idx}`, priced: qwState === 2, waited_ms: qwWaited, rows: Number(qwAdded) || 0 });
   }
 
   const rows = await evaluate(`window.__tvChainRows`);
-  return { found: true, header: init.header, strike_index: init.strike_index, all_expiration_groups: init.all_expiration_groups, rows };
+  const unpricedGroups = groupQuoteStatus.filter((g) => g.rows > 0 && !g.priced).map((g) => g.expiration);
+  if (unpricedGroups.length) console.error(`OPTIONS_TV_QUOTE_WAIT: unpriced_groups=${unpricedGroups.join(',')} spent_ms=${qwSpent}`);
+  return {
+    found: true, header: init.header, strike_index: init.strike_index, all_expiration_groups: init.all_expiration_groups, rows,
+    group_quote_status: groupQuoteStatus,
+    unpriced_groups: unpricedGroups,
+    quote_complete: unpricedGroups.length === 0,
+    quote_wait: { marker: 'QUOTE_WAIT_20260925', spent_ms: qwSpent, budget_exhausted: qwSpent >= QUOTE_WAIT_SYMBOL_MS, bid_ask_columns: qwIdx.length },
+  };
 }
 
 /**
@@ -1174,5 +1363,10 @@ export async function getChain({ symbol, expiration, strike }) {
     expiration: expiration || null,
     header_raw: table.header,
     rows: structured,
+    // QUOTE_WAIT_20260925: caller (fetch_options_chain_tv.mjs) retries when unpriced_groups is non-empty.
+    unpriced_groups: table.unpriced_groups || [],
+    group_quote_status: table.group_quote_status || [],
+    quote_complete: table.quote_complete !== false,
+    quote_wait: table.quote_wait || null,
   };
 }
